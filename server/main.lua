@@ -6,6 +6,7 @@ local Trunks = {}
 local Gloveboxes = {}
 local Stashes = {}
 local ShopItems = {}
+local RegisteredShops = {}
 
 -- Functions
 
@@ -138,7 +139,7 @@ exports("GetFirstSlotByItem", GetFirstSlotByItem)
 
 ---Add an item to the inventory of the player
 
-local function AddItem(source, item, amount, slot, info, created)
+local function AddItem(source, item, amount, slot, info, reason, created)
 	local Player = QBCore.Functions.GetPlayer(source)
 
 	if not Player then return false end
@@ -153,7 +154,8 @@ local function AddItem(source, item, amount, slot, info, created)
 
 	amount = tonumber(amount) or 1
 	slot = tonumber(slot) or GetFirstSlotByItem(Player.PlayerData.items, item)
-	info = info or {}
+	info = type(info) == "table" and info or {} -- Make sure it's not an empty string and is a table
+
 	itemInfo['created'] = created or time
 	info.quality = info.quality or 100
 
@@ -979,7 +981,50 @@ local function CreateNewDrop(source, fromSlot, toSlot, itemAmount, created)
 	end
 end
 
+local function OpenInventoryById(source, targetId)
+    local QBPlayer = QBCore.Functions.GetPlayer(source)
+    local TargetPlayer = QBCore.Functions.GetPlayer(tonumber(targetId))
+    if not QBPlayer or not TargetPlayer then return end
+    if Player(targetId).state.inv_busy then TriggerClientEvent("ps-inventory:client:closeinv", targetId) end
+    Wait(1500)
+    Player(targetId).state.inv_busy = true
+    OpenInventory("otherplayer", targetId, nil, source)
+end
+
+exports('OpenInventoryById', OpenInventoryById)
+
 local function OpenInventory(name, id, other, origin)
+
+    -- New QB compatibility
+    -- QB now calls this like (src, name, ...)
+    -- Setup parameters below if name is of type number to represent a source id
+    if type(name) == "number" then
+        origin = name -- Source was passed as p1
+        name = id -- Name was passed as p2
+        id = name -- Name will be the same as id, but more processing below
+
+        -- Check the name for the type, if it's not there, default to stash
+        if name:find('stash') then
+            name = 'stash'
+        elseif name:find('trunk') then
+            name = 'trunk'
+        elseif name:find('glovebox') then
+            name = 'glovebox'
+        elseif name:find('shop') then
+            name = 'shop'
+        elseif name:find('traphouse') then
+            name = 'traphouse'
+        elseif name:find('crafting') then
+            name = 'crafting'
+        elseif name:find('attachment_crafting') then
+            name = 'attachment_crafting'
+        elseif name:find('otherplayer') then
+            name = 'otherplayer'
+        else
+            name = 'stash' 
+        end
+    end
+
 	local src = origin
 	local ply = Player(src)
     local Player = QBCore.Functions.GetPlayer(src)
@@ -1030,6 +1075,7 @@ local function OpenInventory(name, id, other, origin)
 					Stashes[id].isOpen = src
 					Stashes[id].label = secondInv.label
 				end
+				TriggerClientEvent('ps-inventory:client:SetCurrentStash', src, id)
 			end
 		elseif name == "trunk" then
 			if Trunks[id] then
@@ -1681,7 +1727,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
                         TriggerEvent("qb-log:server:CreateLog", "anticheat", "Dupe log", "red", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | *"..src.."*) swapped item; name: **"..toItemData.name.."**, amount: **" .. toAmount .. "** with name: **" .. fromItemData.name .. "**, amount: **" .. fromAmount.. "**")
 				end
                 end
-                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, fromItemData["created"])
+                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, 'ps-inventory:server:SetInventoryData', fromItemData["created"])
 			elseif QBCore.Shared.SplitStr(toInventory, "-")[1] == "otherplayer" then
 				local playerId = tonumber(QBCore.Shared.SplitStr(toInventory, "-")[2])
 				local OtherPlayer = QBCore.Functions.GetPlayer(playerId)
@@ -1706,7 +1752,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
 					TriggerEvent("qb-log:server:CreateLog", "robbing", "Dropped Item", "red", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | *"..src.."*) dropped new item; name: **"..itemInfo["name"].."**, amount: **" .. fromAmount .. "** to player: **".. GetPlayerName(OtherPlayer.PlayerData.source) .. "** (citizenid: *"..OtherPlayer.PlayerData.citizenid.."* | id: *"..OtherPlayer.PlayerData.source.."*)")
 				end
 				local itemInfo = QBCore.Shared.Items[fromItemData.name:lower()]
-                AddItem(playerId, itemInfo["name"], fromAmount, toSlot, fromItemData.info, itemInfo["created"])
+                AddItem(playerId, itemInfo["name"], fromAmount, toSlot, fromItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
 			elseif QBCore.Shared.SplitStr(toInventory, "-")[1] == "trunk" then
 				local plate = QBCore.Shared.SplitStr(toInventory, "-")[2]
 				local toItemData = Trunks[plate].items[toSlot]
@@ -1885,7 +1931,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
 					end
 				end
 				itemInfo = QBCore.Shared.Items[fromItemData.name:lower()]
-                AddItem(playerId, itemInfo["name"], fromAmount, toSlot, fromItemData.info, itemInfo["created"])
+                AddItem(playerId, itemInfo["name"], fromAmount, toSlot, fromItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
 			end
 		else
 			QBCore.Functions.Notify(src, "Item doesn't exist", "error")
@@ -1905,7 +1951,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
                     if toItemData.amount >= toAmount then
 					if toItemData.name ~= fromItemData.name then
                             Player.Functions.RemoveItem(toItemData.name, toAmount, toSlot)
-                            AddToTrunk(plate, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, itemInfo["created"])
+                            AddToTrunk(plate, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
 						TriggerEvent("qb-log:server:CreateLog", "trunk", "Swapped Item", "orange", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) swapped item; name: **"..toItemData.name.."**, amount: **" .. toAmount .. "** with item; name: **"..itemInfo["name"].."**, amount: **" .. toAmount .. "** plate: *" .. plate .. "*")
 					else
 						TriggerEvent("qb-log:server:CreateLog", "trunk", "Stacked Item", "orange", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) stacked item; name: **"..toItemData.name.."**, amount: **" .. toAmount .. "** from plate: *" .. plate .. "*")
@@ -1916,7 +1962,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
                 else
 					TriggerEvent("qb-log:server:CreateLog", "trunk", "Received Item", "green", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) received item; name: **"..fromItemData.name.."**, amount: **" .. fromAmount.. "** plate: *" .. plate .. "*")
 				end
-                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, fromItemData["created"])
+                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, 'ps-inventory:server:SetInventoryData', fromItemData["created"])
 			else
 				local toItemData = Trunks[plate].items[toSlot]
 				RemoveFromTrunk(plate, fromSlot, itemInfo["name"], fromAmount)
@@ -1926,14 +1972,14 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
 					if toItemData.name ~= fromItemData.name then
                             local itemInfo = QBCore.Shared.Items[toItemData.name:lower()]
 						RemoveFromTrunk(plate, toSlot, itemInfo["name"], toAmount)
-                            AddToTrunk(plate, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, itemInfo["created"])
+                            AddToTrunk(plate, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
                         end
                     else
                         TriggerEvent("qb-log:server:CreateLog", "anticheat", "Dupe log", "red", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | *"..src.."*) swapped item; name: **"..toItemData.name.."**, amount: **" .. toAmount .. "** with name: **" .. itemInfo["name"] .. "**, amount: **" .. toAmount.. "** plate: *" .. plate .. "*")
 					end
 				end
 				itemInfo = QBCore.Shared.Items[fromItemData.name:lower()]
-                AddToTrunk(plate, toSlot, fromSlot, itemInfo["name"], fromAmount, fromItemData.info, itemInfo["created"])
+                AddToTrunk(plate, toSlot, fromSlot, itemInfo["name"], fromAmount, fromItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
 			end
 		else
             QBCore.Functions.Notify(src, "Item doesn\'t exist", 'error')
@@ -1953,7 +1999,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
                     if toItemData.amount >= toAmount then
 					if toItemData.name ~= fromItemData.name then
                             Player.Functions.RemoveItem(toItemData.name, toAmount, toSlot)
-                            AddToGlovebox(plate, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, itemInfo["created"])
+                            AddToGlovebox(plate, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
 						TriggerEvent("qb-log:server:CreateLog", "glovebox", "Swapped", "orange", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src..")* swapped item; name: **"..toItemData.name.."**, amount: **" .. toAmount .. "** with item; name: **"..itemInfo["name"].."**, amount: **" .. toAmount .. "** plate: *" .. plate .. "*")
 					else
 						TriggerEvent("qb-log:server:CreateLog", "glovebox", "Stacked Item", "orange", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) stacked item; name: **"..toItemData.name.."**, amount: **" .. toAmount .. "** from plate: *" .. plate .. "*")
@@ -1964,7 +2010,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
                 else
 					TriggerEvent("qb-log:server:CreateLog", "glovebox", "Received Item", "green", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) received item; name: **"..fromItemData.name.."**, amount: **" .. fromAmount.. "** plate: *" .. plate .. "*")
 				end
-                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, fromItemData["created"])
+                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, 'ps-inventory:server:SetInventoryData', fromItemData["created"])
 			else
 				local toItemData = Gloveboxes[plate].items[toSlot]
 				RemoveFromGlovebox(plate, fromSlot, itemInfo["name"], fromAmount)
@@ -1981,7 +2027,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
 					end
 				end
 				itemInfo = QBCore.Shared.Items[fromItemData.name:lower()]
-                AddToGlovebox(plate, toSlot, fromSlot, itemInfo["name"], fromAmount, fromItemData.info, itemInfo["created"])
+                AddToGlovebox(plate, toSlot, fromSlot, itemInfo["name"], fromAmount, fromItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
 			end
 		else
             QBCore.Functions.Notify(src, "Item doesn\'t exist", 'error')
@@ -2001,7 +2047,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
                     if toItemData.amount >= toAmount then
 					if toItemData.name ~= fromItemData.name then
                             Player.Functions.RemoveItem(toItemData.name, toAmount, toSlot)
-                            AddToStash(stashId, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, itemInfo["created"])
+                            AddToStash(stashId, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
 						TriggerEvent("qb-log:server:CreateLog", "stash", "Swapped Item", "orange", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) swapped item; name: **"..toItemData.name.."**, amount: **" .. toAmount .. "** with item; name: **"..fromItemData.name.."**, amount: **" .. fromAmount .. "** stash: *" .. stashId .. "*")
 					else
 						TriggerEvent("qb-log:server:CreateLog", "stash", "Stacked Item", "orange", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) stacked item; name: **"..toItemData.name.."**, amount: **" .. toAmount .. "** from stash: *" .. stashId .. "*")
@@ -2013,7 +2059,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
 					TriggerEvent("qb-log:server:CreateLog", "stash", "Received Item", "green", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) received item; name: **"..fromItemData.name.."**, amount: **" .. fromAmount.. "** stash: *" .. stashId .. "*")
 				end
 				SaveStashItems(stashId, Stashes[stashId].items)
-                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, fromItemData["created"])
+                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, 'ps-inventory:server:SetInventoryData', fromItemData["created"])
 			else
 				local toItemData = Stashes[stashId].items[toSlot]
 				RemoveFromStash(stashId, fromSlot, itemInfo["name"], fromAmount)
@@ -2023,14 +2069,14 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
 					if toItemData.name ~= fromItemData.name then
                             local itemInfo = QBCore.Shared.Items[toItemData.name:lower()]
 						RemoveFromStash(stashId, toSlot, itemInfo["name"], toAmount)
-                            AddToStash(stashId, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, itemInfo["created"])
+                            AddToStash(stashId, fromSlot, toSlot, itemInfo["name"], toAmount, toItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
                         end
                     else
                         TriggerEvent("qb-log:server:CreateLog", "anticheat", "Dupe log", "red", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) swapped item; name: **"..toItemData.name.."**, amount: **" .. toAmount .. "** with item; name: **"..fromItemData.name.."**, amount: **" .. fromAmount .. "** stash: *" .. stashId .. "*")
 					end
 				end
 				itemInfo = QBCore.Shared.Items[fromItemData.name:lower()]
-                AddToStash(stashId, toSlot, fromSlot, itemInfo["name"], fromAmount, fromItemData.info, itemInfo["created"])
+                AddToStash(stashId, toSlot, fromSlot, itemInfo["name"], fromAmount, fromItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
 			end
 		else
             QBCore.Functions.Notify(src, "Item doesn\'t exist", 'error')
@@ -2061,7 +2107,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
                 else
 					TriggerEvent("qb-log:server:CreateLog", "stash", "Received Item", "green", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) received item; name: **"..fromItemData.name.."**, amount: **" .. fromAmount.. "** stash: *" .. traphouseId .. "*")
 				end
-                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, fromItemData["created"])
+                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, 'ps-inventory:server:SetInventoryData', fromItemData["created"])
 			else
 				local toItemData = exports['qb-traphouse']:GetInventoryData(traphouseId, toSlot)
 				exports['qb-traphouse']:RemoveHouseItem(traphouseId, fromSlot, itemInfo["name"], fromAmount)
@@ -2210,7 +2256,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
                 else
 					TriggerEvent("qb-log:server:CreateLog", "drop", "Received Item", "green", "**".. GetPlayerName(src) .. "** (citizenid: *"..Player.PlayerData.citizenid.."* | id: *"..src.."*) received item; name: **"..fromItemData.name.."**, amount: **" .. fromAmount.. "** -  dropid: *" .. fromInventory .. "*")
 				end
-                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, fromItemData["created"])
+                AddItem(src, fromItemData.name, fromAmount, toSlot, fromItemData.info, 'ps-inventory:server:SetInventoryData', fromItemData["created"])
 			else
 				toInventory = tonumber(toInventory)
 				local toItemData = Drops[toInventory].items[toSlot]
@@ -2231,7 +2277,7 @@ RegisterNetEvent('ps-inventory:server:SetInventoryData', function(fromInventory,
                     end
 				end
 				itemInfo = QBCore.Shared.Items[fromItemData.name:lower()]
-                AddToDrop(toInventory, toSlot, itemInfo["name"], fromAmount, fromItemData.info, itemInfo["created"])
+                AddToDrop(toInventory, toSlot, itemInfo["name"], fromAmount, fromItemData.info, 'ps-inventory:server:SetInventoryData', itemInfo["created"])
 				if itemInfo["name"] == "radio" then
 					TriggerClientEvent('Radio.Set', src, false)
 				end
@@ -2266,7 +2312,7 @@ RegisterServerEvent("ps-inventory:server:GiveItem", function(target, name, amoun
 			amount = item.amount
 		end
 		if RemoveItem(src, item.name, amount, item.slot) then
-			if AddItem(target, item.name, amount, false, item.info, item.created) then
+			if AddItem(target, item.name, amount, false, item.info, "ps-inventory:server:GiveItem", item.created) then
 				TriggerClientEvent('ps-inventory:client:ItemBox',target, QBCore.Shared.Items[item.name], "add")
 				QBCore.Functions.Notify(target, "You Received "..amount..' '..item.label.." From "..Player.PlayerData.charinfo.firstname.." "..Player.PlayerData.charinfo.lastname)
 				TriggerClientEvent("ps-inventory:client:UpdatePlayerInventory", target, true)
@@ -2276,7 +2322,7 @@ RegisterServerEvent("ps-inventory:server:GiveItem", function(target, name, amoun
 				TriggerClientEvent('ps-inventory:client:giveAnim', src)
 				TriggerClientEvent('ps-inventory:client:giveAnim', target)
 			else
-				AddItem(src, item.name, amount, item.slot, item.info, item.created)
+				AddItem(src, item.name, amount, item.slot, item.info, "ps-inventory:server:GiveItem", item.created)
 				QBCore.Functions.Notify(src, "The other players inventory is full!", "error")
 				QBCore.Functions.Notify(target, "The other players inventory is full!", "error")
 				TriggerClientEvent("ps-inventory:client:UpdatePlayerInventory", src, false)
@@ -2538,6 +2584,10 @@ function ConvertQuality(item)
     if DecayRate == nil then
         DecayRate = 0
     end
+    if not (type(StartDate) == "number") then
+        if not (tonumber(StartDate)) then return 0 end
+        StartDate = tonumber(StartDate)
+    end
     local TimeExtra = math.ceil((TimeAllowed * DecayRate))
     local percentDone = 100 - math.ceil((((os.time() - StartDate) / TimeExtra) * 100))
     if DecayRate == 0 then
@@ -2695,6 +2745,66 @@ QBCore.Functions.CreateCallback('ps-inventory:server:ConvertQuality', function(s
     data.other = other
     cb(data)
 end)
+
+-- Shop functionality
+
+function CreateShop(shopData)
+    if shopData.name then
+        RegisteredShops[shopData.name] = {
+            name = shopData.name,
+            label = shopData.label,
+            coords = shopData.coords,
+            slots = #shopData.items,
+            items = SetupShopItems(shopData.items)
+        }
+    else
+        for key, data in pairs(shopData) do
+            if type(data) == 'table' then
+                if data.name then
+                    local shopName = type(key) == 'number' and data.name or key
+                    RegisteredShops[shopName] = {
+                        name = shopName,
+                        label = data.label,
+                        coords = data.coords,
+                        slots = #data.items,
+                        items = SetupShopItems(data.items)
+                    }
+                else
+                    CreateShop(data)
+                end
+            end
+        end
+    end
+end
+
+exports('CreateShop', CreateShop)
+
+function OpenShop(source, name)
+    if not name then return end
+    local Player = QBCore.Functions.GetPlayer(source)
+    if not Player then return end
+    if not RegisteredShops[name] then return end
+    local playerPed = GetPlayerPed(source)
+    local playerCoords = GetEntityCoords(playerPed)
+    if RegisteredShops[name].coords then
+        local shopDistance = vector3(RegisteredShops[name].coords.x, RegisteredShops[name].coords.y, RegisteredShops[name].coords.z)
+        if shopDistance then
+            local distance = #(playerCoords - shopDistance)
+            if distance > 5.0 then return end
+        end
+    end
+    local formattedInventory = {
+        name = 'itemshop-' .. RegisteredShops[name].name,
+        label = RegisteredShops[name].label,
+        maxweight = 5000000,
+        slots = #RegisteredShops[name].items,
+        items = RegisteredShops[name].items
+    }
+
+	OpenInventory("shop", RegisteredShops[name].name, formattedInventory, source)
+end
+
+exports('OpenShop', OpenShop)
 
 -- Warning Messages
 
